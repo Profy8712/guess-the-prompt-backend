@@ -36,3 +36,20 @@ class Room:
 
     def get_player_names(self):
         return [p.name for p in self.players]
+
+    def set_prompt(self, prompt: str):
+        self.prompt = prompt
+
+    def set_image_url(self, url: str):
+        self.image_url = url
+
+    def next_turn(self):
+        if not self.players:
+            self.current_turn = 0
+            return
+        self.current_turn = (self.current_turn + 1) % len(self.players)
+
+    def add_score(self, player_name: str):
+        player = self.find_player(player_name)
+        if player:
+            player.score += 1

@@ -22,3 +22,16 @@ class RoomInfo(BaseModel):
 
 class LeaveRoomRequest(BaseModel):
     player_name: str
+
+class PromptRequest(BaseModel):
+    player_name: str
+    prompt: str
+
+class GuessRequest(BaseModel):
+    player_name: str
+    guess: str
+
+class ScoreUpdateResponse(BaseModel):
+    player_name: str
+    score: int
+    correct: bool

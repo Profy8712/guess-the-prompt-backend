@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from uuid import uuid4
+
 from app.schemas import (
     CreateRoomResponse,
     JoinRoomRequest,
@@ -36,7 +37,6 @@ async def join_room(room_id: str, req: JoinRoomRequest):
     if room.find_player(req.player_name):
         raise HTTPException(status_code=400, detail="Player already in room")
     player = room.add_player(req.player_name)
-    # Broadcast event: player joined
     await manager.broadcast(room_id, {
         "event": "player_joined",
         "player": player.name,
@@ -52,7 +52,6 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
     player = room.remove_player(req.player_name)
     if not player:
         raise HTTPException(status_code=404, detail="Player not found in room")
-    # Broadcast event: player left
     await manager.broadcast(room_id, {
         "event": "player_left",
         "player": req.player_name,
@@ -63,7 +62,6 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
         return {"message": f"Player {req.player_name} left and room {room_id} deleted"}
     if player.role == "admin" and room.players:
         room.players[0].role = "admin"
-        # Broadcast event: new admin
         await manager.broadcast(room_id, {
             "event": "admin_changed",
             "new_admin": room.players[0].name
@@ -103,10 +101,9 @@ async def submit_prompt(room_id: str, req: PromptRequest):
         room.set_image_url(image_url)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
-    # Broadcast event: new round started
     await manager.broadcast(room_id, {
         "event": "new_round",
-        "prompt": "[hidden]",  # скрывай prompt для игроков
+        "prompt": "[hidden]",  # скрываем prompt для игроков
         "image_url": room.image_url,
         "current_turn": room.current_turn,
         "players": room.get_player_names(),
@@ -127,7 +124,6 @@ async def make_guess(room_id: str, req: GuessRequest):
         room.prompt = None
         room.image_url = None
         room.next_turn()
-        # Broadcast event: someone guessed correctly
         await manager.broadcast(room_id, {
             "event": "correct_guess",
             "player": req.player_name,
@@ -137,7 +133,6 @@ async def make_guess(room_id: str, req: GuessRequest):
             "next_turn": room.current_turn,
         })
     else:
-        # Broadcast event: wrong guess
         await manager.broadcast(room_id, {
             "event": "wrong_guess",
             "player": req.player_name,
@@ -156,7 +151,6 @@ async def next_turn(room_id: str):
         raise HTTPException(status_code=404, detail="Room not found")
     prev_turn = room.current_turn
     room.next_turn()
-    # Broadcast event: turn changed (force-next)
     await manager.broadcast(room_id, {
         "event": "turn_changed",
         "prev_turn": prev_turn,

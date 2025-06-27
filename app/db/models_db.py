@@ -10,7 +10,7 @@ class Room(Base):
     state = Column(String, default="waiting")
     current_turn = Column(Integer, default=0)
 
-    players = relationship("Player", back_populates="room")
+    players = relationship("Player", back_populates="room", cascade="all, delete-orphan")
 
 class Player(Base):
     __tablename__ = "players"

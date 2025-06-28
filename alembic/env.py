@@ -1,24 +1,41 @@
-from logging.config import fileConfig
-from sqlalchemy import pool
-from alembic import context
 import os
 import sys
+from logging.config import fileConfig
 
-# Добавляем путь к app
+from sqlalchemy import pool, create_engine  # Синхронный движок!
+from alembic import context
+
+# Для .env (например, DATABASE_URL)
+from dotenv import load_dotenv
+load_dotenv()
+
+# Добавляем app в PYTHONPATH
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.db.models_db import Base  # <-- Импортируем Base для metadata
+# Импортируем Base для metadata
+from app.db.models_db import Base
 
-# Alembic Config
+# Alembic config
 config = context.config
 
-# Logging config
+# Логирование
 fileConfig(config.config_file_name)
 
+# Метаданные моделей
 target_metadata = Base.metadata
 
+def get_url():
+    # Берём DATABASE_URL из env и убираем asyncpg (только для миграций!)
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError("No DATABASE_URL provided for alembic!")
+    # Если ты работаешь с asyncpg — заменяем на sync для миграций
+    if url.startswith("postgresql+asyncpg"):
+        url = url.replace("postgresql+asyncpg", "postgresql")
+    return url
+
 def run_migrations_offline():
-    url = config.get_main_option("sqlalchemy.url")
+    url = get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -31,27 +48,18 @@ def run_migrations_offline():
         context.run_migrations()
 
 def run_migrations_online():
-    from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+    url = get_url()
+    connectable = create_engine(url, poolclass=pool.NullPool)
 
-    url = config.get_main_option("sqlalchemy.url")
-    connectable = create_async_engine(url, poolclass=pool.NullPool)
-
-    async def do_run_migrations(connection):
+    with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
         )
 
-        async with context.begin_transaction():
-            await context.run_migrations()
-
-    import asyncio
-    asyncio.run(run_async_migrations(connectable, do_run_migrations))
-
-async def run_async_migrations(connectable, do_run_migrations):
-    async with connectable.connect() as connection:
-        await do_run_migrations(connection)
+        with context.begin_transaction():
+            context.run_migrations()
 
 if context.is_offline_mode():
     run_migrations_offline()

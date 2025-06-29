@@ -12,13 +12,18 @@ async def generate_image(prompt: str) -> str:
         "Content-Type": "application/json"
     }
     data = {
-        "model": "dall-e-3",
+        "model": "dall-e-2",
         "prompt": prompt,
         "n": 1,
-        "size": "512x512"
+        "size": "512x512",
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, headers=headers, json=data, timeout=60)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception:
+            print("OpenAI 400/500 error. Request sent:", data)
+            print("OpenAI response:", resp.text)
+            raise Exception(f"OpenAI error: {resp.text}")
         result = resp.json()
         return result["data"][0]["url"]

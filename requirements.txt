@@ -9,4 +9,4 @@ python-dotenv
 pytest>=8.0
 pytest-asyncio>=0.23
 aiosqlite  # если вдруг будут async-тесты или миграции под SQLite
-`1`
+

@@ -12,7 +12,7 @@ from app.schemas import (
     ScoreUpdateResponse,
 )
 from app.models import Room
-from app.openai_client import generate_image
+from app.replicate_client import generate_image
 from app.ws_manager import manager
 
 rooms_storage = {}
@@ -93,8 +93,9 @@ async def submit_prompt(room_id: str, req: PromptRequest):
         raise HTTPException(status_code=404, detail="Room not found")
     if not room.players or room.players[room.current_turn].name != req.player_name:
         raise HTTPException(status_code=403, detail="Not your turn")
-    if len(req.prompt.strip().split()) not in [1, 2]:
-        raise HTTPException(status_code=400, detail="Prompt must be 1 or 2 words")
+    # -- ДЛЯ DALL-E: Пропускаем проверку на длину промпта! --
+    # if len(req.prompt.strip().split()) not in [1, 2]:
+    #     raise HTTPException(status_code=400, detail="Prompt must be 1 or 2 words")
     room.set_prompt(req.prompt)
     try:
         image_url = await generate_image(req.prompt)

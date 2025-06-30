@@ -1,40 +1,37 @@
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.rooms import rooms_router
 from app.db.rooms_db import rooms_db_router
+from app.accounts.routes import accounts_router
+from app.accounts.auth import decode_access_token
 from app.ws_manager import manager
-from app.replicate_client import generate_image  # Генерация изображений через Replicate
+from app.replicate_client import generate_image
 
-# Загрузка переменных из .env
+# Загрузка переменных окружения из .env
 load_dotenv()
-
-# Проверка SECRET_KEY
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is not set in the environment!")
 
 app = FastAPI(title="Guess the Prompt Backend")
 
-# --- CORS (Dev: allow all, Prod: specify your domains) ---
+# Разрешить CORS для фронта
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: Указать домены в проде!
+    allow_origins=["*"],  # Для production лучше ограничить список!
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# ---------------------------------------------------------
 
-# Routers
+# Роуты REST API
 app.include_router(rooms_router)
 app.include_router(rooms_db_router)
-# Будущие роутеры, например:
-# app.include_router(auth_router)
+app.include_router(accounts_router, prefix="/api/v1/accounts", tags=["Accounts"])
 
-# Healthcheck
 @app.get("/")
 def root():
     return {"message": "Guess the Prompt backend is running"}
@@ -43,9 +40,26 @@ def root():
 def health():
     return {"status": "ok"}
 
-# --- WebSocket для комнаты ---
 @app.websocket("/ws/rooms/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    # Получение токена из query params
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        payload = decode_access_token(token)
+        if not payload:
+            raise Exception("Invalid token")
+        username = payload.get("sub")
+        role = payload.get("role", "user")
+        if not username:
+            raise Exception("No username in token")
+    except Exception:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     await manager.connect(room_id, websocket)
     try:
         while True:
@@ -53,9 +67,14 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             event = data.get("event")
 
             if event == "prompt":
-                prompt = data.get("prompt", "").strip()
+                if role != "admin":
+                    await manager.send_personal_message(
+                        {"event": "error", "message": "Only admin can set the prompt."},
+                        websocket
+                    )
+                    continue
 
-                # Проверка промпта
+                prompt = data.get("prompt", "").strip()
                 if not prompt or len(prompt.split()) > 2:
                     await manager.send_personal_message(
                         {"event": "error", "message": "Prompt must be 1–2 words only."},
@@ -78,12 +97,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             elif event == "chat":
                 await manager.broadcast(room_id, {
                     "event": "chat",
-                    "data": data.get("data")
+                    "data": data.get("data"),
+                    "from": username
                 })
 
     except WebSocketDisconnect:
         manager.disconnect(room_id, websocket)
         await manager.broadcast(room_id, {
             "event": "left",
-            "message": "A player left the room"
+            "message": f"{username} left the room"
         })

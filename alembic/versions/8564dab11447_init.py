@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 12af8a434d5d
+Revision ID: 8564dab11447
 Revises: 
-Create Date: 2025-06-28 15:35:40.295645
+Create Date: 2025-06-30 16:17:05.975618
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '12af8a434d5d'
+revision: str = '8564dab11447'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -30,13 +30,26 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_rooms_id'), 'rooms', ['id'], unique=False)
     op.create_index(op.f('ix_rooms_room_id'), 'rooms', ['room_id'], unique=True)
+    op.create_table('users',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('username', sa.String(), nullable=False),
+    sa.Column('hashed_password', sa.String(), nullable=False),
+    sa.Column('total_games', sa.Integer(), nullable=True),
+    sa.Column('total_score', sa.Integer(), nullable=True),
+    sa.Column('avatar_url', sa.String(), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_users_id'), 'users', ['id'], unique=False)
+    op.create_index(op.f('ix_users_username'), 'users', ['username'], unique=True)
     op.create_table('players',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(), nullable=True),
     sa.Column('role', sa.String(), nullable=True),
     sa.Column('score', sa.Integer(), nullable=True),
     sa.Column('room_id', sa.Integer(), nullable=True),
+    sa.Column('user_id', sa.Integer(), nullable=True),
     sa.ForeignKeyConstraint(['room_id'], ['rooms.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_players_id'), 'players', ['id'], unique=False)
@@ -50,6 +63,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_players_name'), table_name='players')
     op.drop_index(op.f('ix_players_id'), table_name='players')
     op.drop_table('players')
+    op.drop_index(op.f('ix_users_username'), table_name='users')
+    op.drop_index(op.f('ix_users_id'), table_name='users')
+    op.drop_table('users')
     op.drop_index(op.f('ix_rooms_room_id'), table_name='rooms')
     op.drop_index(op.f('ix_rooms_id'), table_name='rooms')
     op.drop_table('rooms')

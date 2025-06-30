@@ -6,46 +6,60 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from httpx import AsyncClient, ASGITransport
+from httpx import AsyncClient
+from httpx._transports.asgi import ASGITransport
 
 from app.main import app
-from app.db.models_db import Base
 from app.db.database import get_db
+from app.db.models_db import Base
 
-# Загружаем переменные окружения из .env.test
-load_dotenv(dotenv_path=".env.test")
+# Загружаем переменные окружения для тестовой БД
+load_dotenv(".env.test")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Получаем строку подключения к тестовой базе
-TEST_DATABASE_URL = os.getenv("DATABASE_URL")
+@pytest_asyncio.fixture
+async def db_engine():
+    """
+    Создает отдельный async engine для каждого теста.
+    """
+    engine = create_async_engine(DATABASE_URL, future=True)
+    yield engine
+    await engine.dispose()
 
-# Создаём движок и фабрику сессий для тестовой базы
-engine_test = create_async_engine(TEST_DATABASE_URL, future=True)
-TestingSessionLocal = sessionmaker(
-    bind=engine_test,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
-
-# Перед всеми тестами: создаём таблицы, после — удаляем
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def prepare_database():
-    async with engine_test.begin() as conn:
+@pytest_asyncio.fixture
+async def prepare_database(db_engine):
+    """
+    Сбрасывает и создает все таблицы перед каждым тестом.
+    """
+    async with db_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield
-    async with engine_test.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
 
-# Подмена зависимости FastAPI get_db на тестовую сессию
-@pytest_asyncio.fixture(autouse=True)
-def override_get_db():
-    async def _override_get_db():
-        async with TestingSessionLocal() as session:
-            yield session
-    app.dependency_overrides[get_db] = _override_get_db
-
-# Асинхронный тестовый клиент с ASGITransport (правильно для httpx>=0.27)
 @pytest_asyncio.fixture
-async def client():
+async def session_maker(db_engine, prepare_database):
+    """
+    Фикстура для создания sessionmaker, привязанного к engine.
+    """
+    return sessionmaker(bind=db_engine, class_=AsyncSession, expire_on_commit=False)
+
+@pytest_asyncio.fixture
+async def override_get_db(session_maker):
+    """
+    Подменяет зависимость get_db на тестовую сессию.
+    """
+    async def _get_db():
+        async with session_maker() as session:
+            yield session
+    app.dependency_overrides[get_db] = _get_db
+    yield
+    app.dependency_overrides.clear()  # Очищаем подмену после теста
+
+@pytest_asyncio.fixture
+async def async_client(override_get_db):
+    """
+    Тестовый AsyncClient для взаимодействия с FastAPI-приложением.
+    """
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client

@@ -1,6 +1,5 @@
+import os
 from dotenv import load_dotenv
-load_dotenv()
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,6 +7,14 @@ from app.rooms import rooms_router
 from app.db.rooms_db import rooms_db_router
 from app.ws_manager import manager
 from app.replicate_client import generate_image  # Генерация изображений через Replicate
+
+# Загрузка переменных из .env
+load_dotenv()
+
+# Проверка SECRET_KEY
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is not set in the environment!")
 
 app = FastAPI(title="Guess the Prompt Backend")
 
@@ -24,6 +31,8 @@ app.add_middleware(
 # Routers
 app.include_router(rooms_router)
 app.include_router(rooms_db_router)
+# Будущие роутеры, например:
+# app.include_router(auth_router)
 
 # Healthcheck
 @app.get("/")

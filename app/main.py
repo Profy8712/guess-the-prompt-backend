@@ -69,16 +69,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if event == "prompt":
                 if role != "admin":
                     await manager.send_personal_message(
-                        {"event": "error", "message": "Only admin can set the prompt."},
-                        websocket
+                        websocket,
+                        {"event": "error", "message": "Only admin can set the prompt."}
                     )
                     continue
 
                 prompt = data.get("prompt", "").strip()
                 if not prompt or len(prompt.split()) > 2:
                     await manager.send_personal_message(
-                        {"event": "error", "message": "Prompt must be 1–2 words only."},
-                        websocket
+                        websocket,
+                        {"event": "error", "message": "Prompt must be 1–2 words only."}
                     )
                     continue
 
@@ -90,8 +90,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     })
                 except Exception as e:
                     await manager.send_personal_message(
-                        {"event": "error", "message": f"Image generation failed: {str(e)}"},
-                        websocket
+                        websocket,
+                        {"event": "error", "message": f"Image generation failed: {str(e)}"}
                     )
 
             elif event == "chat":

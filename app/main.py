@@ -1,4 +1,6 @@
 import os
+import random
+import string
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +23,7 @@ app = FastAPI(title="Guess the Prompt Backend")
 # Разрешить CORS для фронта
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Для production лучше ограничить список!
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,21 +46,23 @@ def health():
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     # Получение токена из query params
     token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
 
-    try:
-        payload = decode_access_token(token)
-        if not payload:
-            raise Exception("Invalid token")
-        username = payload.get("sub")
-        role = payload.get("role", "user")
-        if not username:
-            raise Exception("No username in token")
-    except Exception:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    # ======= Гостевой вход =======
+    if not token:
+        username = "Guest_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        role = "guest"
+    else:
+        try:
+            payload = decode_access_token(token)
+            if not payload:
+                raise Exception("Invalid token")
+            username = payload.get("sub")
+            role = payload.get("role", "user")
+            if not username:
+                raise Exception("No username in token")
+        except Exception:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
 
     await manager.connect(room_id, websocket)
     try:

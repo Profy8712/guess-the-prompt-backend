@@ -3,7 +3,7 @@ from fastapi import WebSocket
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}  # room_id: [WebSocket, ...]
+        self.active_connections: Dict[str, List[WebSocket]] = {}
 
     async def connect(self, room_id: str, websocket: WebSocket):
         await websocket.accept()

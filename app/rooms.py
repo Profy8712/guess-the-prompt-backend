@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from uuid import uuid4
 from datetime import datetime
 import asyncio
+import random
 
 from app.schemas import (
     CreateRoomResponse,
@@ -113,10 +114,12 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
         # Не удаляем сразу — будет удалена через 15 минут фоновым таском!
         return {"message": f"Player {req.player_name} left; room {room_id} will be auto-deleted after 15 min if empty"}
     if player.role == "admin" and room.players:
-        room.players[0].role = "admin"
+        # Назначить нового админа случайно
+        new_admin = random.choice(room.players)
+        new_admin.role = "admin"
         await manager.broadcast(room_id, {
             "event": "admin_changed",
-            "new_admin": room.players[0].name
+            "new_admin": new_admin.name
         })
     return {"message": f"Player {req.player_name} left room {room_id}"}
 

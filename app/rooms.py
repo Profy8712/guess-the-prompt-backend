@@ -34,13 +34,13 @@ async def cleanup_rooms():
         now = datetime.utcnow()
         to_delete = []
         for room_id, room in list(rooms_storage.items()):
-            # 1. Удалить, если пуста 15 мин
+            # 1. Delete if empty for 15 min
             if room.empty_since:
                 age = (now - room.empty_since).total_seconds()
                 if age > ROOM_EMPTY_DELETE_SECONDS:
                     to_delete.append(room_id)
                     continue
-            # 2. Удалить, если не было активности 30 мин
+            # 2. Delete if no activity for 30 min
             if hasattr(room, "last_activity") and room.last_activity:
                 inactivity = (now - room.last_activity).total_seconds()
                 if inactivity > ROOM_INACTIVE_DELETE_SECONDS:
@@ -62,7 +62,7 @@ async def on_startup():
     ensure_cleanup_task()
 
 def mark_activity(room):
-    """Обновляет last_activity комнаты."""
+    """Update room's last_activity timestamp."""
     room.last_activity = datetime.utcnow()
 
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
@@ -112,7 +112,7 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
     })
     if len(room.players) == 0:
         return {"message": f"Player {req.player_name} left; room {room_id} will be auto-deleted after 15 min if empty"}
-    # Назначаем нового админа случайно, если ушёл текущий админ
+    # If admin leaves, assign a new one randomly
     if player.role == "admin" and room.players:
         new_admin = random.choice(room.players)
         for p in room.players:
@@ -134,7 +134,7 @@ async def get_room_info(room_id: str):
         PlayerInfo(name=p.name, role=p.role, score=p.score)
         for p in room.players
     ]
-    # Если фронту нужно имя админа — возвращай room.get_admin()
+    # current_admin - имя админа, current_prompter - имя игрока, чья очередь
     return RoomInfo(
         room_id=room.room_id,
         players=players,
@@ -142,7 +142,8 @@ async def get_room_info(room_id: str):
         current_turn=room.current_turn,
         prompt=room.prompt,
         image_url=room.image_url,
-        current_admin=room.get_admin() if hasattr(room, "get_admin") else None
+        current_admin=room.get_admin() if hasattr(room, "get_admin") else None,
+        current_prompter=room.players[room.current_turn].name if room.players else None
     )
 
 @rooms_router.post("/rooms/{room_id}/prompt")
@@ -158,7 +159,7 @@ async def submit_prompt(room_id: str, req: PromptRequest):
         image_url = await generate_image(req.prompt)
         room.set_image_url(image_url)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
     await manager.broadcast(room_id, {
         "event": "new_round",
         "prompt": "[hidden]",

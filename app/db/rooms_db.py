@@ -28,6 +28,7 @@ async def get_all_rooms_db(db: AsyncSession = Depends(get_db)):
             "room_id": room.room_id,
             "state": room.state,
             "current_turn": room.current_turn,
+            "created_at": room.created_at.isoformat() if room.created_at else None,
         }
         for room in rooms
     ]

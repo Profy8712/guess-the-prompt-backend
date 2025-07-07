@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime  # Исправлено!
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -22,6 +23,7 @@ class Room(Base):
     room_id = Column(String, unique=True, index=True)
     state = Column(String, default="waiting")
     current_turn = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)  # OK
 
     # Все игроки в этой комнате
     players = relationship("Player", back_populates="room", cascade="all, delete-orphan")

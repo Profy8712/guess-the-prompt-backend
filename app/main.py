@@ -5,14 +5,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.rooms import rooms_router
+from app.rooms import rooms_router, rooms_storage  # rooms_storage — тот самый!
 from app.db.rooms_db import rooms_db_router
 from app.accounts.routes import accounts_router
 from app.accounts.auth import decode_access_token
 from app.ws_manager import manager
 from app.replicate_client import generate_image
 
-# Загрузка переменных окружения из .env
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
@@ -20,7 +19,6 @@ if not SECRET_KEY:
 
 app = FastAPI(title="Guess the Prompt Backend")
 
-# Разрешить CORS для фронта
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +27,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Роуты REST API
 app.include_router(rooms_router)
 app.include_router(rooms_db_router)
 app.include_router(accounts_router, prefix="/api/v1/accounts", tags=["Accounts"])
@@ -44,10 +41,7 @@ def health():
 
 @app.websocket("/ws/rooms/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
-    # Получение токена из query params
     token = websocket.query_params.get("token")
-
-    # ======= Гостевой вход =======
     if not token:
         username = "Guest_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
         role = "guest"

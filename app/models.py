@@ -28,8 +28,8 @@ class Room:
         role = "admin" if not self.players else "user"
         player = Player(name, role)
         self.players.append(player)
-        self.empty_since = None  # Сбросить, когда зашел игрок
-        self.update_activity()   # Обновить last_activity
+        self.empty_since = None
+        self.update_activity()
         return player
 
     def remove_player(self, name: str):
@@ -37,8 +37,8 @@ class Room:
         if player:
             self.players.remove(player)
             if len(self.players) == 0:
-                self.empty_since = datetime.utcnow()  # Отметить, когда опустела
-            self.update_activity()   # Обновить last_activity
+                self.empty_since = datetime.utcnow()
+            self.update_activity()
             return player
         return None
 
@@ -47,25 +47,31 @@ class Room:
 
     def set_prompt(self, prompt: str):
         self.prompt = prompt
-        self.update_activity()   # Обновить last_activity
+        self.update_activity()
 
     def set_image_url(self, url: str):
         self.image_url = url
-        self.update_activity()   # Обновить last_activity
+        self.update_activity()
 
     def next_turn(self):
         if not self.players:
             self.current_turn = 0
             return
         self.current_turn = (self.current_turn + 1) % len(self.players)
-        self.update_activity()   # Обновить last_activity
+        self.update_activity()
 
     def add_score(self, player_name: str):
         player = self.find_player(player_name)
         if player:
             player.score += 1
-            self.update_activity()   # Обновить last_activity
+            self.update_activity()
 
     def update_activity(self):
-        """Обновляет время последней активности."""
         self.last_activity = datetime.utcnow()
+
+    def get_admin(self) -> Optional[str]:
+        """Возвращает имя текущего админа или None."""
+        for p in self.players:
+            if p.role == "admin":
+                return p.name
+        return None

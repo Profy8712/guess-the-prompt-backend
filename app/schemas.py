@@ -19,6 +19,7 @@ class RoomInfo(BaseModel):
     current_turn: int
     prompt: Optional[str] = None
     image_url: Optional[str] = None
+    current_admin: Optional[str] = None   # Added for front (optional)
 
 class LeaveRoomRequest(BaseModel):
     player_name: str

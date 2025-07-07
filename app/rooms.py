@@ -22,10 +22,10 @@ rooms_storage = {}
 
 rooms_router = APIRouter()
 
-# ---Cleaning of rooms ---
-ROOM_CLEANUP_PERIOD_SECONDS = 60          # Check period, sec
-ROOM_EMPTY_DELETE_SECONDS = 15 * 60       # Empty room - 15 min
-ROOM_INACTIVE_DELETE_SECONDS = 30 * 60    # Inactive (no requests) - 30 min
+# --- Cleaning of rooms ---
+ROOM_CLEANUP_PERIOD_SECONDS = 60           # Check period, sec
+ROOM_EMPTY_DELETE_SECONDS = 15 * 60        # Empty room - 15 min
+ROOM_INACTIVE_DELETE_SECONDS = 30 * 60     # Inactive (no requests) - 30 min
 
 cleanup_task_started = False
 
@@ -62,7 +62,7 @@ async def on_startup():
     ensure_cleanup_task()
 
 def mark_activity(room):
-    # Каждое изменение/запрос к комнате отмечает активность
+    """Обновляет last_activity комнаты."""
     room.last_activity = datetime.utcnow()
 
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
@@ -111,11 +111,12 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
         "players": room.get_player_names(),
     })
     if len(room.players) == 0:
-        # Не удаляем сразу — будет удалена через 15 минут фоновым таском!
         return {"message": f"Player {req.player_name} left; room {room_id} will be auto-deleted after 15 min if empty"}
+    # Назначаем нового админа случайно, если ушёл текущий админ
     if player.role == "admin" and room.players:
-        # Назначить нового админа случайно
         new_admin = random.choice(room.players)
+        for p in room.players:
+            p.role = "user"
         new_admin.role = "admin"
         await manager.broadcast(room_id, {
             "event": "admin_changed",
@@ -133,6 +134,7 @@ async def get_room_info(room_id: str):
         PlayerInfo(name=p.name, role=p.role, score=p.score)
         for p in room.players
     ]
+    # Если фронту нужно имя админа — возвращай room.get_admin()
     return RoomInfo(
         room_id=room.room_id,
         players=players,
@@ -140,6 +142,7 @@ async def get_room_info(room_id: str):
         current_turn=room.current_turn,
         prompt=room.prompt,
         image_url=room.image_url,
+        current_admin=room.get_admin() if hasattr(room, "get_admin") else None
     )
 
 @rooms_router.post("/rooms/{room_id}/prompt")

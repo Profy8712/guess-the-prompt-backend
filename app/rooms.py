@@ -65,6 +65,25 @@ def mark_activity(room):
     """Update room's last_activity timestamp."""
     room.last_activity = datetime.utcnow()
 
+async def broadcast_room_update(room_id, room):
+    players = [
+        PlayerInfo(name=p.name, role=p.role, score=p.score)
+        for p in room.players
+    ]
+    await manager.broadcast(room_id, {
+        "event": "room_update",
+        "data": RoomInfo(
+            room_id=room.room_id,
+            players=players,
+            state=room.state,
+            current_turn=room.current_turn,
+            prompt=room.prompt,
+            image_url=room.image_url,
+            current_admin=room.get_admin() if hasattr(room, "get_admin") else None,
+            current_prompter=room.players[room.current_turn].name if room.players else None
+        ).dict()
+    })
+
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room():
     ensure_cleanup_task()
@@ -74,6 +93,7 @@ async def create_room():
     new_room = Room(room_id)
     new_room.last_activity = datetime.utcnow()
     rooms_storage[room_id] = new_room
+    await broadcast_room_update(room_id, new_room)
     return CreateRoomResponse(room_id=room_id)
 
 @rooms_router.post("/rooms/{room_id}/join", response_model=PlayerInfo)
@@ -93,6 +113,7 @@ async def join_room(room_id: str, req: JoinRoomRequest):
         "player": player.name,
         "players": room.get_player_names(),
     })
+    await broadcast_room_update(room_id, room)
     return PlayerInfo(name=player.name, role=player.role, score=player.score)
 
 @rooms_router.post("/rooms/{room_id}/leave")
@@ -111,6 +132,7 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
         "players": room.get_player_names(),
     })
     if len(room.players) == 0:
+        await broadcast_room_update(room_id, room)
         return {"message": f"Player {req.player_name} left; room {room_id} will be auto-deleted after 15 min if empty"}
     # If admin leaves, assign a new one randomly
     if player.role == "admin" and room.players:
@@ -122,6 +144,7 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
             "event": "admin_changed",
             "new_admin": new_admin.name
         })
+    await broadcast_room_update(room_id, room)
     return {"message": f"Player {req.player_name} left room {room_id}"}
 
 @rooms_router.get("/rooms/{room_id}", response_model=RoomInfo)
@@ -134,7 +157,6 @@ async def get_room_info(room_id: str):
         PlayerInfo(name=p.name, role=p.role, score=p.score)
         for p in room.players
     ]
-    # current_admin - имя админа, current_prompter - имя игрока, чья очередь
     return RoomInfo(
         room_id=room.room_id,
         players=players,
@@ -167,6 +189,7 @@ async def submit_prompt(room_id: str, req: PromptRequest):
         "current_turn": room.current_turn,
         "players": room.get_player_names(),
     })
+    await broadcast_room_update(room_id, room)
     return {"prompt": room.prompt, "image_url": room.image_url}
 
 @rooms_router.post("/rooms/{room_id}/guess", response_model=ScoreUpdateResponse)
@@ -198,6 +221,7 @@ async def make_guess(room_id: str, req: GuessRequest):
             "player": req.player_name,
             "guess": req.guess,
         })
+    await broadcast_room_update(room_id, room)
     return ScoreUpdateResponse(
         player_name=req.player_name,
         score=room.find_player(req.player_name).score,
@@ -217,4 +241,5 @@ async def next_turn(room_id: str):
         "prev_turn": prev_turn,
         "next_turn": room.current_turn,
     })
+    await broadcast_room_update(room_id, room)
     return {"current_turn": room.current_turn}

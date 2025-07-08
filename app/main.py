@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.rooms import rooms_router, rooms_storage  # rooms_storage — тот самый!
+from app.rooms import rooms_router, rooms_storage  # rooms_storage — то самое!
 from app.db.rooms_db import rooms_db_router
 from app.accounts.routes import accounts_router
 from app.accounts.auth import decode_access_token
@@ -27,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Подключаем все роутеры
 app.include_router(rooms_router)
 app.include_router(rooms_db_router)
 app.include_router(accounts_router, prefix="/api/v1/accounts", tags=["Accounts"])
@@ -42,6 +43,7 @@ def health():
 @app.websocket("/ws/rooms/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     token = websocket.query_params.get("token")
+    # ======= Guest вход =======
     if not token:
         username = "Guest_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
         role = "guest"
@@ -59,12 +61,14 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             return
 
     await manager.connect(room_id, websocket)
+
     try:
         while True:
             data = await websocket.receive_json()
             event = data.get("event")
 
             if event == "prompt":
+                # Только админ может выставлять промпт
                 if role != "admin":
                     await manager.send_personal_message(
                         websocket,
@@ -98,6 +102,29 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     "data": data.get("data"),
                     "from": username
                 })
+
+            # Например, можно добавить сюда "room_update", чтобы по требованию фронта всегда отдавать полный state:
+            elif event == "get_room_state":
+                room = rooms_storage.get(room_id)
+                if room:
+                    from app.schemas import RoomInfo, PlayerInfo
+                    players = [
+                        PlayerInfo(name=p.name, role=p.role, score=p.score)
+                        for p in room.players
+                    ]
+                    await manager.send_personal_message(
+                        websocket,
+                        RoomInfo(
+                            room_id=room.room_id,
+                            players=players,
+                            state=room.state,
+                            current_turn=room.current_turn,
+                            prompt=room.prompt,
+                            image_url=room.image_url,
+                            current_admin=room.get_admin() if hasattr(room, "get_admin") else None,
+                            current_prompter=room.players[room.current_turn].name if room.players else None
+                        ).dict()
+                    )
 
     except WebSocketDisconnect:
         manager.disconnect(room_id, websocket)

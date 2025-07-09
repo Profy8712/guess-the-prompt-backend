@@ -25,7 +25,6 @@ rooms_storage = {}
 
 rooms_router = APIRouter()
 
-# --- Cleaning of rooms ---
 ROOM_CLEANUP_PERIOD_SECONDS = 60
 ROOM_EMPTY_DELETE_SECONDS = 15 * 60
 ROOM_INACTIVE_DELETE_SECONDS = 30 * 60
@@ -104,17 +103,16 @@ async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depen
         raise HTTPException(status_code=404, detail="Room not found")
     if len(room.players) >= 10:
         raise HTTPException(status_code=400, detail="Room is full (max 10 players)")
-    # --- ВАЖНО: не допускаем дублирования ---
+    # Prevent duplicates
     player = room.find_player(req.player_name)
     if player is not None:
         raise HTTPException(status_code=400, detail="Player already in room")
-    # Найти user_id по имени, если есть такой User
+    # Find user_id if registered
     result = await db.execute(
         User.__table__.select().where(User.username == req.player_name)
     )
     user = result.first()
     user_id = user.id if user else None
-    # В add_player дубли теперь невозможны
     player = room.add_player(req.player_name, user_id=user_id)
     if player is None:
         raise HTTPException(status_code=400, detail="Player already in room")

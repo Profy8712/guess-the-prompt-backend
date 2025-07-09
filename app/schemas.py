@@ -19,8 +19,8 @@ class RoomInfo(BaseModel):
     current_turn: int
     prompt: Optional[str] = None
     image_url: Optional[str] = None
-    current_admin: Optional[str] = None      # Для фронта (по имени)
-    current_prompter: Optional[str] = None   # <-- Новый параметр (по имени)
+    current_admin: Optional[str] = None
+    current_prompter: Optional[str] = None
 
 class LeaveRoomRequest(BaseModel):
     player_name: str

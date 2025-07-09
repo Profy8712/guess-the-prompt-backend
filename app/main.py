@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.rooms import rooms_router, rooms_storage  # rooms_storage — то самое!
+from app.rooms import rooms_router, rooms_storage
 from app.db.rooms_db import rooms_db_router
 from app.accounts.routes import accounts_router
 from app.accounts.auth import decode_access_token
@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем все роутеры
+# Routers
 app.include_router(rooms_router)
 app.include_router(rooms_db_router)
 app.include_router(accounts_router, prefix="/api/v1/accounts", tags=["Accounts"])
@@ -43,7 +43,6 @@ def health():
 @app.websocket("/ws/rooms/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     token = websocket.query_params.get("token")
-    # ======= Guest вход =======
     if not token:
         username = "Guest_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
         role = "guest"
@@ -68,7 +67,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             event = data.get("event")
 
             if event == "prompt":
-                # Только админ может выставлять промпт
                 if role != "admin":
                     await manager.send_personal_message(
                         websocket,
@@ -103,7 +101,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     "from": username
                 })
 
-            # Например, можно добавить сюда "room_update", чтобы по требованию фронта всегда отдавать полный state:
             elif event == "get_room_state":
                 room = rooms_storage.get(room_id)
                 if room:

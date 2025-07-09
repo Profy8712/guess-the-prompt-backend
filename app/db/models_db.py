@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime  # Исправлено!
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -13,7 +13,6 @@ class User(Base):
     total_score = Column(Integer, default=0)
     avatar_url = Column(String, nullable=True)
 
-    # Привязка к Player (связь один-ко-многим)
     players = relationship("Player", back_populates="user", cascade="all, delete-orphan")
 
 class Room(Base):
@@ -23,9 +22,8 @@ class Room(Base):
     room_id = Column(String, unique=True, index=True)
     state = Column(String, default="waiting")
     current_turn = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)  # OK
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Все игроки в этой комнате
     players = relationship("Player", back_populates="room", cascade="all, delete-orphan")
 
 class Player(Base):
@@ -36,8 +34,7 @@ class Player(Base):
     role = Column(String)
     score = Column(Integer, default=0)
     room_id = Column(Integer, ForeignKey("rooms.id"))
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Игрок может быть привязан к User
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    # Привязка к Room и User
     room = relationship("Room", back_populates="players")
     user = relationship("User", back_populates="players")

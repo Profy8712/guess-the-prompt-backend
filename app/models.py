@@ -26,6 +26,9 @@ class Room:
         return None
 
     def add_player(self, name: str, user_id: Optional[int] = None):
+        # --- Fix: Prevent duplicates! ---
+        if self.find_player(name):
+            return None
         role = "admin" if not self.players else "user"
         player = Player(name, role, user_id)
         self.players.append(player)

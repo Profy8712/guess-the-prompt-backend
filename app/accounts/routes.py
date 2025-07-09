@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.db.database import get_db
-from app.db.models_db import User # <--- импортируем User прямо отсюда!
+from app.db.models_db import User
 from app.accounts import schemas, services, auth
 
 router = APIRouter()
@@ -37,5 +37,14 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(User.total_score.desc()).limit(10))
     users = result.scalars().all()
     return users
+
+# --- PUBLIC STATS ENDPOINT ---
+@router.get("/stats/{username}", response_model=schemas.UserStats)
+async def get_user_stats(username: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.username == username))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 accounts_router = router

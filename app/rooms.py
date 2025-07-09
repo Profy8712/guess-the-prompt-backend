@@ -5,7 +5,6 @@ import asyncio
 import random
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.schemas import (
     CreateRoomResponse,
     JoinRoomRequest,
@@ -105,7 +104,9 @@ async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depen
         raise HTTPException(status_code=404, detail="Room not found")
     if len(room.players) >= 10:
         raise HTTPException(status_code=400, detail="Room is full (max 10 players)")
-    if room.find_player(req.player_name):
+    # --- ВАЖНО: не допускаем дублирования ---
+    player = room.find_player(req.player_name)
+    if player is not None:
         raise HTTPException(status_code=400, detail="Player already in room")
     # Найти user_id по имени, если есть такой User
     result = await db.execute(
@@ -113,7 +114,10 @@ async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depen
     )
     user = result.first()
     user_id = user.id if user else None
+    # В add_player дубли теперь невозможны
     player = room.add_player(req.player_name, user_id=user_id)
+    if player is None:
+        raise HTTPException(status_code=400, detail="Player already in room")
     mark_activity(room)
     await manager.broadcast(room_id, {
         "event": "player_joined",
@@ -210,12 +214,12 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
     player = room.find_player(req.player_name)
     if correct:
         room.add_score(req.player_name)
-        # === ОБНОВЛЯЕМ User в базе ===
+        # Update User in DB
         if player and player.user_id:
             user = await db.get(User, player.user_id)
             if user:
                 user.total_score += 1
-                user.total_games += 1  # по необходимости
+                user.total_games += 1
                 await db.commit()
         prev_turn = room.current_turn
         room.prompt = None
@@ -224,7 +228,7 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
         await manager.broadcast(room_id, {
             "event": "correct_guess",
             "player": req.player_name,
-            "score": player.score,
+            "score": player.score if player else 0,
             "answer": req.guess,
             "prev_turn": prev_turn,
             "next_turn": room.current_turn,

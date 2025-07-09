@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from uuid import uuid4
 from datetime import datetime
 import asyncio
 import random
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas import (
     CreateRoomResponse,
@@ -15,6 +17,8 @@ from app.schemas import (
     ScoreUpdateResponse,
 )
 from app.models import Room
+from app.db.database import get_db
+from app.db.models_db import User
 from app.replicate_client import generate_image
 from app.ws_manager import manager
 
@@ -23,9 +27,9 @@ rooms_storage = {}
 rooms_router = APIRouter()
 
 # --- Cleaning of rooms ---
-ROOM_CLEANUP_PERIOD_SECONDS = 60           # Check period, sec
-ROOM_EMPTY_DELETE_SECONDS = 15 * 60        # Empty room - 15 min
-ROOM_INACTIVE_DELETE_SECONDS = 30 * 60     # Inactive (no requests) - 30 min
+ROOM_CLEANUP_PERIOD_SECONDS = 60
+ROOM_EMPTY_DELETE_SECONDS = 15 * 60
+ROOM_INACTIVE_DELETE_SECONDS = 30 * 60
 
 cleanup_task_started = False
 
@@ -34,13 +38,11 @@ async def cleanup_rooms():
         now = datetime.utcnow()
         to_delete = []
         for room_id, room in list(rooms_storage.items()):
-            # 1. Delete if empty for 15 min
             if room.empty_since:
                 age = (now - room.empty_since).total_seconds()
                 if age > ROOM_EMPTY_DELETE_SECONDS:
                     to_delete.append(room_id)
                     continue
-            # 2. Delete if no activity for 30 min
             if hasattr(room, "last_activity") and room.last_activity:
                 inactivity = (now - room.last_activity).total_seconds()
                 if inactivity > ROOM_INACTIVE_DELETE_SECONDS:
@@ -62,7 +64,6 @@ async def on_startup():
     ensure_cleanup_task()
 
 def mark_activity(room):
-    """Update room's last_activity timestamp."""
     room.last_activity = datetime.utcnow()
 
 async def broadcast_room_update(room_id, room):
@@ -97,7 +98,7 @@ async def create_room():
     return CreateRoomResponse(room_id=room_id)
 
 @rooms_router.post("/rooms/{room_id}/join", response_model=PlayerInfo)
-async def join_room(room_id: str, req: JoinRoomRequest):
+async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depends(get_db)):
     ensure_cleanup_task()
     room = rooms_storage.get(room_id)
     if not room:
@@ -106,7 +107,13 @@ async def join_room(room_id: str, req: JoinRoomRequest):
         raise HTTPException(status_code=400, detail="Room is full (max 10 players)")
     if room.find_player(req.player_name):
         raise HTTPException(status_code=400, detail="Player already in room")
-    player = room.add_player(req.player_name)
+    # Найти user_id по имени, если есть такой User
+    result = await db.execute(
+        User.__table__.select().where(User.username == req.player_name)
+    )
+    user = result.first()
+    user_id = user.id if user else None
+    player = room.add_player(req.player_name, user_id=user_id)
     mark_activity(room)
     await manager.broadcast(room_id, {
         "event": "player_joined",
@@ -134,7 +141,6 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
     if len(room.players) == 0:
         await broadcast_room_update(room_id, room)
         return {"message": f"Player {req.player_name} left; room {room_id} will be auto-deleted after 15 min if empty"}
-    # If admin leaves, assign a new one randomly
     if player.role == "admin" and room.players:
         new_admin = random.choice(room.players)
         for p in room.players:
@@ -193,7 +199,7 @@ async def submit_prompt(room_id: str, req: PromptRequest):
     return {"prompt": room.prompt, "image_url": room.image_url}
 
 @rooms_router.post("/rooms/{room_id}/guess", response_model=ScoreUpdateResponse)
-async def make_guess(room_id: str, req: GuessRequest):
+async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends(get_db)):
     room = rooms_storage.get(room_id)
     if not room or not room.prompt:
         raise HTTPException(status_code=404, detail="No active round in this room")
@@ -201,8 +207,16 @@ async def make_guess(room_id: str, req: GuessRequest):
         raise HTTPException(status_code=403, detail="You can't guess on your own prompt")
     correct = req.guess.strip().lower() == room.prompt.strip().lower()
     mark_activity(room)
+    player = room.find_player(req.player_name)
     if correct:
         room.add_score(req.player_name)
+        # === ОБНОВЛЯЕМ User в базе ===
+        if player and player.user_id:
+            user = await db.get(User, player.user_id)
+            if user:
+                user.total_score += 1
+                user.total_games += 1  # по необходимости
+                await db.commit()
         prev_turn = room.current_turn
         room.prompt = None
         room.image_url = None
@@ -210,7 +224,7 @@ async def make_guess(room_id: str, req: GuessRequest):
         await manager.broadcast(room_id, {
             "event": "correct_guess",
             "player": req.player_name,
-            "score": room.find_player(req.player_name).score,
+            "score": player.score,
             "answer": req.guess,
             "prev_turn": prev_turn,
             "next_turn": room.current_turn,
@@ -224,7 +238,7 @@ async def make_guess(room_id: str, req: GuessRequest):
     await broadcast_room_update(room_id, room)
     return ScoreUpdateResponse(
         player_name=req.player_name,
-        score=room.find_player(req.player_name).score,
+        score=player.score if player else 0,
         correct=correct,
     )
 

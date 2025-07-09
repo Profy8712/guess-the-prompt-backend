@@ -2,10 +2,11 @@ from typing import List, Optional
 from datetime import datetime
 
 class Player:
-    def __init__(self, name: str, role: str = "user"):
+    def __init__(self, name: str, role: str = "user", user_id: Optional[int] = None):
         self.name = name
-        self.role = role  # "admin" или "user"
+        self.role = role  # "admin" or "user"
         self.score = 0
+        self.user_id = user_id
 
 class Room:
     def __init__(self, room_id: str):
@@ -15,8 +16,8 @@ class Room:
         self.current_turn = 0
         self.prompt: Optional[str] = None
         self.image_url: Optional[str] = None
-        self.empty_since: Optional[datetime] = None  # Когда комната опустела
-        self.last_activity: datetime = datetime.utcnow()  # Когда была последняя активность
+        self.empty_since: Optional[datetime] = None
+        self.last_activity: datetime = datetime.utcnow()
 
     def find_player(self, name: str) -> Optional[Player]:
         for player in self.players:
@@ -24,9 +25,9 @@ class Room:
                 return player
         return None
 
-    def add_player(self, name: str):
+    def add_player(self, name: str, user_id: Optional[int] = None):
         role = "admin" if not self.players else "user"
-        player = Player(name, role)
+        player = Player(name, role, user_id)
         self.players.append(player)
         self.empty_since = None
         self.update_activity()
@@ -70,7 +71,6 @@ class Room:
         self.last_activity = datetime.utcnow()
 
     def get_admin(self) -> Optional[str]:
-        """Возвращает имя текущего админа или None."""
         for p in self.players:
             if p.role == "admin":
                 return p.name

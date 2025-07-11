@@ -37,3 +37,16 @@ class ScoreUpdateResponse(BaseModel):
     player_name: str
     score: int
     correct: bool
+
+# Новые для настроек/старта игры/кика
+class ChangeSettingsRequest(BaseModel):
+    round_count: int = 5
+    prompt_words: int = 1
+    turn_length: int = 60
+
+class KickPlayerRequest(BaseModel):
+    player_name: str
+
+class StartGameResponse(BaseModel):
+    message: str
+    settings: dict

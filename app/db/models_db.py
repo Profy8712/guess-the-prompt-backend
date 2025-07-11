@@ -1,93 +1,41 @@
-from typing import List, Optional
+from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from datetime import datetime
-import asyncio
 
-class Player:
-    def __init__(self, name: str, role: str = "user", user_id: Optional[int] = None):
-        self.name = name
-        self.role = role  # "admin" or "user"
-        self.score = 0
-        self.user_id = user_id
-        self.prompt_submitted = False
+Base = declarative_base()
 
-class Room:
-    def __init__(self, room_id: str):
-        self.room_id = room_id
-        self.players: List[Player] = []
-        self.state = "waiting"
-        self.current_turn = 0
-        self.round_number = 1
-        self.round_count = 5          # default
-        self.prompt_words = 1         # default
-        self.turn_length = 60         # default (сек)
-        self.prompt: Optional[str] = None
-        self.image_url: Optional[str] = None
-        self.empty_since: Optional[datetime] = None
-        self.last_activity: datetime = datetime.utcnow()
-        self.timer_task: Optional[asyncio.Task] = None
+class User(Base):
+    __tablename__ = "users"
 
-    def find_player(self, name: str) -> Optional[Player]:
-        for player in self.players:
-            if player.name == name:
-                return player
-        return None
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    total_games = Column(Integer, default=0)
+    total_score = Column(Integer, default=0)
+    avatar_url = Column(String, nullable=True)
 
-    def add_player(self, name: str, user_id: Optional[int] = None):
-        if self.find_player(name):
-            return None
-        role = "admin" if not self.players else "user"
-        player = Player(name, role, user_id)
-        self.players.append(player)
-        self.empty_since = None
-        self.update_activity()
-        return player
+    players = relationship("Player", back_populates="user", cascade="all, delete-orphan")
 
-    def remove_player(self, name: str):
-        player = self.find_player(name)
-        if player:
-            self.players.remove(player)
-            if len(self.players) == 0:
-                self.empty_since = datetime.utcnow()
-            self.update_activity()
-            return player
-        return None
+class Room(Base):
+    __tablename__ = "rooms"
 
-    def get_player_names(self) -> List[str]:
-        return [p.name for p in self.players]
+    id = Column(Integer, primary_key=True, index=True)
+    room_id = Column(String, unique=True, index=True)
+    state = Column(String, default="waiting")
+    current_turn = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    def set_prompt(self, prompt: str):
-        self.prompt = prompt
-        self.update_activity()
+    players = relationship("Player", back_populates="room", cascade="all, delete-orphan")
 
-    def set_image_url(self, url: str):
-        self.image_url = url
-        self.update_activity()
+class Player(Base):
+    __tablename__ = "players"
 
-    def next_turn(self):
-        if not self.players:
-            self.current_turn = 0
-            return
-        self.current_turn = (self.current_turn + 1) % len(self.players)
-        self.update_activity()
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    role = Column(String)
+    score = Column(Integer, default=0)
+    room_id = Column(Integer, ForeignKey("rooms.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    def add_score(self, player_name: str):
-        player = self.find_player(player_name)
-        if player:
-            player.score += 1
-            self.update_activity()
-
-    def update_activity(self):
-        self.last_activity = datetime.utcnow()
-
-    def get_admin(self) -> Optional[str]:
-        for p in self.players:
-            if p.role == "admin":
-                return p.name
-        return None
-
-    def to_settings(self):
-        return {
-            "round_count": self.round_count,
-            "prompt_words": self.prompt_words,
-            "turn_length": self.turn_length,
-        }
+    room = relationship("Room", back_populates="players")
+    user = relationship("User", back_populates="players")

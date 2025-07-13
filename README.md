@@ -1,33 +1,32 @@
 # Guess The Prompt – Backend
 
-A backend API for an online game where players take turns generating images using AI (Replicate – Stable Diffusion), and other players try to guess the prompt. Supports user registration, authentication, persistent profiles, scoring, and real-time gameplay via WebSockets.
+A backend API for an online multiplayer game where players take turns generating images using AI (Replicate – Stable Diffusion), and others try to guess the prompt. Features user registration, authentication, persistent profiles, leaderboards, scoring, real-time gameplay (WebSocket), flexible game settings, and more.
 
 ---
 
 ## Features
 
-- **User Accounts:** Registration, login, JWT authentication, and persistent player profiles (score, avatar, stats).
-- **Room Management:** Create, join, and leave game rooms.
-- **Player Management:** Assign roles, link game progress to users, track scores and stats.
-- **Game Flow:** Prompt submission, guessing, turn management.
-- **Image Generation:** Integration with Replicate (Stable Diffusion).
-- **WebSockets:** Real-time updates for room events.
+- **User Accounts:** Registration, JWT login, and persistent player stats (score, avatar, total games, etc).
+- **Game Rooms:** Create, join, leave, kick players, change settings, start game, and manage rounds.
+- **Gameplay:** Prompt submission, AI image generation, guessing, scores, and automated turn timers.
 - **Leaderboards:** Top players by score.
-- **PostgreSQL Database:** Persistent storage via SQLAlchemy/Alembic.
-- **Dockerized:** Fast deployment and easy testing.
-- **Test Coverage:** Async API tests included.
+- **Real-time:** WebSocket support for instant room updates.
+- **Persistent Storage:** PostgreSQL + SQLAlchemy ORM + Alembic migrations.
+- **Image Generation:** Replicate Stable Diffusion integration (see [replicate.com](https://replicate.com/)).
+- **Dockerized:** Fast deployment for dev and prod.
+- **Async Test Coverage:** Pytest-based async tests included.
 
 ---
 
 ## Requirements
 
-- Docker & Docker Compose
+- **Docker** & **Docker Compose** (recommended)
 - Replicate API key (for image generation)
-- Python 3.11+ (for local runs without Docker)
+- Python 3.11+ (for local runs)
 
 ---
 
-## Quick Start (with Docker)
+## Quick Start (Docker)
 
 1. **Clone the repository:**
     ```bash
@@ -41,7 +40,7 @@ A backend API for an online game where players take turns generating images usin
     # Edit .env.docker: set your REPLICATE_API_TOKEN, SECRET_KEY, etc.
     ```
 
-3. **Build and run services:**
+3. **Build and run the backend:**
     ```bash
     docker compose up --build -d
     ```
@@ -51,8 +50,8 @@ A backend API for an online game where players take turns generating images usin
     docker compose exec backend alembic upgrade head
     ```
 
-5. **Check API status:**
-    - API: [http://localhost:8000](http://localhost:8000)
+5. **Check API:**
+    - API root: [http://localhost:8000](http://localhost:8000)
     - Swagger docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 6. **Run tests:**
@@ -66,27 +65,47 @@ A backend API for an online game where players take turns generating images usin
 
 ---
 
-## Main Endpoints
+## API Endpoints
 
-### Accounts
+### User Accounts
 
-- `POST   /api/v1/accounts/register`   – Register a new user
-- `POST   /api/v1/accounts/login`      – Obtain JWT access token
-- `GET    /api/v1/accounts/me`         – Get current user profile
-- `GET    /api/v1/accounts/leaderboard`– Top 10 players by score
+- `POST   /api/v1/accounts/register`    – Register new user
+- `POST   /api/v1/accounts/login`       – Obtain JWT token
+- `GET    /api/v1/accounts/me`          – Current user profile (auth required)
+- `GET    /api/v1/accounts/leaderboard` – Top 10 by score
+- `GET    /api/v1/accounts/stats/{username}` – Public stats for any player
 
-### Rooms & Gameplay
+### Rooms & Game Management
 
-- `POST   /rooms`                     – Create a new game room
-- `POST   /rooms/{room_id}/join`      – Join a room
-- `POST   /rooms/{room_id}/leave`     – Leave a room
-- `GET    /rooms/{room_id}`           – Get room info
-- `POST   /rooms/{room_id}/prompt`    – Submit a prompt (image generation)
-- `POST   /rooms/{room_id}/guess`     – Submit a guess
-- `POST   /rooms/{room_id}/next`      – Next turn
-- `GET    /health`                    – Health check
+- `POST   /rooms`                      – Create a new game room
+- `POST   /rooms/{room_id}/join`       – Join a room by nickname
+- `POST   /rooms/{room_id}/leave`      – Leave room
+- `POST   /rooms/{room_id}/kick_player` – Kick player (admin only)
+- `POST   /rooms/{room_id}/change_settings` – Change game settings (admin)
+- `POST   /rooms/{room_id}/start_game` – Start the game (admin)
+- `GET    /rooms/{room_id}`            – Get current room state
+- `POST   /rooms/{room_id}/prompt`     – Submit a prompt for image (by current prompter)
+- `POST   /rooms/{room_id}/guess`      – Guess the prompt
+- `GET    /health`                     – Health check
 
-> See full, interactive API docs at `/docs`.
+### WebSocket
+
+- `ws://localhost:8000/ws/rooms/{room_id}?token=JWT`  
+  Real-time room updates, timer events, chat, etc.
+
+> See interactive docs at `/docs` for the full OpenAPI specification.
+
+---
+
+## Game Flow
+
+1. **Create / Join Room:** Players join a lobby, can chat, and wait for others.
+2. **Game Settings:** Admin (room creator) sets rounds, turn timer, and prompt length.
+3. **Start Game:** Admin starts; server manages round/turn order, timers, and sends updates.
+4. **Prompt Submission:** Current player submits a prompt (1–2 words) → AI image generated.
+5. **Guessing:** Other players submit guesses during the turn timer.
+6. **Scoring:** Scores tracked in real-time; after all rounds, total stats are updated.
+7. **Leaderboard:** See who’s on top!
 
 ---
 
@@ -98,6 +117,8 @@ A backend API for an online game where players take turns generating images usin
 │ ├── ws_manager.py
 │ ├── replicate_client.py
 │ ├── rooms.py
+│ ├── models.py
+│ ├── schemas.py
 │ ├── db/
 │ │ ├── database.py
 │ │ └── models_db.py
@@ -119,3 +140,25 @@ A backend API for an online game where players take turns generating images usin
 ├── README.md
 └── .env.docker
 
+yaml
+Copy
+Edit
+
+---
+
+## Environment Variables
+
+- `DATABASE_URL`
+- `REPLICATE_API_TOKEN`
+- `SECRET_KEY`
+- (See `.env.example` or `.env.docker` for a template)
+
+---
+
+## License
+
+MIT License
+
+---
+
+**Made with ❤️ by [Profy8712](https://github.com/Profy8712) – PRs & stars welcome!**

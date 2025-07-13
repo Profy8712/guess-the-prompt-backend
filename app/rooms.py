@@ -20,7 +20,6 @@ rooms_storage = {}
 
 rooms_router = APIRouter()
 
-# --- Room cleanup ---
 ROOM_CLEANUP_PERIOD_SECONDS = 60
 ROOM_EMPTY_DELETE_SECONDS = 15 * 60
 ROOM_INACTIVE_DELETE_SECONDS = 30 * 60
@@ -79,7 +78,8 @@ async def broadcast_room_update(room_id, room):
         ).dict()
     })
 
-# ---- CREATE, JOIN, LEAVE, INFO (без изменений) ----
+# ==== Основные игровые эндпоинты ====
+
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room():
     ensure_cleanup_task()
@@ -169,7 +169,8 @@ async def get_room_info(room_id: str):
         current_prompter=room.players[room.current_turn].name if room.players else None
     )
 
-# ---- CHANGE SETTINGS ----
+# ==== Новые эндпоинты: settings, kick, start_game ====
+
 @rooms_router.post("/rooms/{room_id}/change_settings")
 async def change_settings(room_id: str, req: ChangeSettingsRequest):
     room = rooms_storage.get(room_id)
@@ -181,7 +182,6 @@ async def change_settings(room_id: str, req: ChangeSettingsRequest):
     await broadcast_room_update(room_id, room)
     return {"message": "Settings updated", "settings": room.to_settings()}
 
-# ---- KICK PLAYER ----
 @rooms_router.post("/rooms/{room_id}/kick_player")
 async def kick_player(room_id: str, req: KickPlayerRequest):
     room = rooms_storage.get(room_id)
@@ -198,7 +198,6 @@ async def kick_player(room_id: str, req: KickPlayerRequest):
     await broadcast_room_update(room_id, room)
     return {"message": f"Player {req.player_name} was kicked."}
 
-# ---- START GAME ----
 @rooms_router.post("/rooms/{room_id}/start_game", response_model=StartGameResponse)
 async def start_game(room_id: str):
     room = rooms_storage.get(room_id)
@@ -222,7 +221,8 @@ async def start_game(room_id: str):
         settings=room.to_settings(),
     )
 
-# ====== Таймер и обработка ходов ======
+# ==== Таймер + управление ходами ====
+
 async def start_turn_with_timer(room_id: str):
     room = rooms_storage.get(room_id)
     if not room or room.state != "playing":
@@ -263,3 +263,72 @@ async def end_turn(room_id: str):
             })
             return
     asyncio.create_task(start_turn_with_timer(room_id))
+
+# ==== PROMPT/GENERATION ====
+@rooms_router.post("/rooms/{room_id}/prompt")
+async def submit_prompt(room_id: str, req: PromptRequest):
+    room = rooms_storage.get(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if not room.players or room.players[room.current_turn].name != req.player_name:
+        raise HTTPException(status_code=403, detail="Not your turn")
+    room.set_prompt(req.prompt)
+    mark_activity(room)
+    try:
+        image_url = await generate_image(req.prompt)
+        room.set_image_url(image_url)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
+    await manager.broadcast(room_id, {
+        "event": "new_round",
+        "prompt": "[hidden]",
+        "image_url": room.image_url,
+        "current_turn": room.current_turn,
+        "players": room.get_player_names(),
+    })
+    await broadcast_room_update(room_id, room)
+    return {"prompt": room.prompt, "image_url": room.image_url}
+
+# ==== GUESS ====
+@rooms_router.post("/rooms/{room_id}/guess", response_model=ScoreUpdateResponse)
+async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends(get_db)):
+    room = rooms_storage.get(room_id)
+    if not room or not room.prompt:
+        raise HTTPException(status_code=404, detail="No active round in this room")
+    if req.player_name == room.players[room.current_turn].name:
+        raise HTTPException(status_code=403, detail="You can't guess on your own prompt")
+    correct = req.guess.strip().lower() == room.prompt.strip().lower()
+    mark_activity(room)
+    player = room.find_player(req.player_name)
+    if correct:
+        room.add_score(req.player_name)
+        if player and player.user_id:
+            user = await db.get(User, player.user_id)
+            if user:
+                user.total_score += 1
+                user.total_games += 1
+                await db.commit()
+        prev_turn = room.current_turn
+        room.prompt = None
+        room.image_url = None
+        room.next_turn()
+        await manager.broadcast(room_id, {
+            "event": "correct_guess",
+            "player": req.player_name,
+            "score": player.score if player else 0,
+            "answer": req.guess,
+            "prev_turn": prev_turn,
+            "next_turn": room.current_turn,
+        })
+    else:
+        await manager.broadcast(room_id, {
+            "event": "wrong_guess",
+            "player": req.player_name,
+            "guess": req.guess,
+        })
+    await broadcast_room_update(room_id, room)
+    return ScoreUpdateResponse(
+        player_name=req.player_name,
+        score=player.score if player else 0,
+        correct=correct,
+    )

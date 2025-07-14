@@ -10,14 +10,106 @@ from app.schemas import (
     LeaveRoomRequest, PromptRequest, GuessRequest, ScoreUpdateResponse,
     ChangeSettingsRequest, KickPlayerRequest, StartGameResponse,
 )
-from app.models import Room
 from app.db.database import get_db
 from app.db.models_db import User
 from app.replicate_client import generate_image
 from app.ws_manager import manager
+from typing import List, Optional
+
+# =================== Классы ===================
+
+class Player:
+    def __init__(self, name: str, role: str = "user", user_id: Optional[int] = None):
+        self.name = name
+        self.role = role  # "admin" или "user"
+        self.score = 0
+        self.user_id = user_id
+        self.prompt_submitted = False
+
+class Room:
+    def __init__(self, room_id: str):
+        self.room_id = room_id
+        self.players: List[Player] = []
+        self.state = "waiting"
+        self.current_turn = 0
+        self.round_number = 1
+        self.round_count = 5        # по умолчанию
+        self.prompt_words = 1       # по умолчанию
+        self.turn_length = 60       # по умолчанию
+        self.prompt: Optional[str] = None
+        self.image_url: Optional[str] = None
+        self.empty_since: Optional[datetime] = None
+        self.last_activity: datetime = datetime.utcnow()
+
+    def find_player(self, name: str) -> Optional[Player]:
+        for player in self.players:
+            if player.name == name:
+                return player
+        return None
+
+    def add_player(self, name: str, user_id: Optional[int] = None):
+        if self.find_player(name):
+            return None
+        role = "admin" if not self.players else "user"
+        player = Player(name, role, user_id)
+        self.players.append(player)
+        self.empty_since = None
+        self.update_activity()
+        return player
+
+    def remove_player(self, name: str):
+        player = self.find_player(name)
+        if player:
+            self.players.remove(player)
+            if len(self.players) == 0:
+                self.empty_since = datetime.utcnow()
+            self.update_activity()
+            return player
+        return None
+
+    def get_player_names(self) -> List[str]:
+        return [p.name for p in self.players]
+
+    def set_prompt(self, prompt: str):
+        self.prompt = prompt
+        self.update_activity()
+
+    def set_image_url(self, url: str):
+        self.image_url = url
+        self.update_activity()
+
+    def next_turn(self):
+        if not self.players:
+            self.current_turn = 0
+            return
+        self.current_turn = (self.current_turn + 1) % len(self.players)
+        self.update_activity()
+
+    def add_score(self, player_name: str):
+        player = self.find_player(player_name)
+        if player:
+            player.score += 1
+            self.update_activity()
+
+    def update_activity(self):
+        self.last_activity = datetime.utcnow()
+
+    def get_admin(self) -> Optional[str]:
+        for p in self.players:
+            if p.role == "admin":
+                return p.name
+        return None
+
+    def to_settings(self):
+        return {
+            "round_count": self.round_count,
+            "prompt_words": self.prompt_words,
+            "turn_length": self.turn_length,
+        }
+
+# ============ Хранилище комнат и роутер ===============
 
 rooms_storage = {}
-
 rooms_router = APIRouter()
 
 ROOM_CLEANUP_PERIOD_SECONDS = 60
@@ -73,12 +165,12 @@ async def broadcast_room_update(room_id, room):
             current_turn=room.current_turn,
             prompt=room.prompt,
             image_url=room.image_url,
-            current_admin=room.get_admin() if hasattr(room, "get_admin") else None,
+            current_admin=room.get_admin(),
             current_prompter=room.players[room.current_turn].name if room.players else None
         ).dict()
     })
 
-# ==== Основные игровые эндпоинты ====
+# ================= Основные игровые эндпоинты ================
 
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room():
@@ -109,6 +201,8 @@ async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depen
     user = result.first()
     user_id = user.id if user else None
     player = room.add_player(req.player_name, user_id=user_id)
+    if player is None:
+        raise HTTPException(status_code=400, detail="Cannot add player")
     mark_activity(room)
     await manager.broadcast(room_id, {
         "event": "player_joined",
@@ -165,11 +259,11 @@ async def get_room_info(room_id: str):
         current_turn=room.current_turn,
         prompt=room.prompt,
         image_url=room.image_url,
-        current_admin=room.get_admin() if hasattr(room, "get_admin") else None,
+        current_admin=room.get_admin(),
         current_prompter=room.players[room.current_turn].name if room.players else None
     )
 
-# ==== Новые эндпоинты: settings, kick, start_game ====
+# ================= Новые эндпоинты ================
 
 @rooms_router.post("/rooms/{room_id}/change_settings")
 async def change_settings(room_id: str, req: ChangeSettingsRequest):
@@ -221,7 +315,7 @@ async def start_game(room_id: str):
         settings=room.to_settings(),
     )
 
-# ==== Таймер + управление ходами ====
+# ================= Таймер и управление ходами ================
 
 async def start_turn_with_timer(room_id: str):
     room = rooms_storage.get(room_id)
@@ -264,7 +358,8 @@ async def end_turn(room_id: str):
             return
     asyncio.create_task(start_turn_with_timer(room_id))
 
-# ==== PROMPT/GENERATION ====
+# ================= Промпты и генерация изображения ================
+
 @rooms_router.post("/rooms/{room_id}/prompt")
 async def submit_prompt(room_id: str, req: PromptRequest):
     room = rooms_storage.get(room_id)
@@ -289,7 +384,8 @@ async def submit_prompt(room_id: str, req: PromptRequest):
     await broadcast_room_update(room_id, room)
     return {"prompt": room.prompt, "image_url": room.image_url}
 
-# ==== GUESS ====
+# ================= Угадывания ================
+
 @rooms_router.post("/rooms/{room_id}/guess", response_model=ScoreUpdateResponse)
 async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends(get_db)):
     room = rooms_storage.get(room_id)

@@ -16,12 +16,10 @@ from app.replicate_client import generate_image
 from app.ws_manager import manager
 from typing import List, Optional
 
-# =================== Classes ===================
-
 class Player:
     def __init__(self, name: str, role: str = "user", user_id: Optional[int] = None):
         self.name = name
-        self.role = role  # "admin" or "user"
+        self.role = role
         self.score = 0
         self.user_id = user_id
         self.prompt_submitted = False
@@ -41,6 +39,7 @@ class Room:
         self.image_url: Optional[str] = None
         self.empty_since: Optional[datetime] = None
         self.last_activity: datetime = datetime.utcnow()
+        self.timer_task: Optional[asyncio.Task] = None
 
     def find_player(self, name: str) -> Optional[Player]:
         for player in self.players:
@@ -109,12 +108,10 @@ class Room:
         }
 
     def reset_guesses(self):
-        # Resets guessed flag for all players except the prompter (current_turn)
         for idx, p in enumerate(self.players):
             p.guessed = (idx == self.current_turn)
 
     def all_have_guessed(self):
-        # Checks if all players except the prompter have made a guess
         for idx, p in enumerate(self.players):
             if idx == self.current_turn:
                 continue
@@ -123,12 +120,14 @@ class Room:
         return True
 
     def reset_game(self):
-        # Reset all room state to the beginning
         self.state = "waiting"
         self.current_turn = 0
         self.round_number = 1
         self.prompt = None
         self.image_url = None
+        if self.timer_task and not self.timer_task.done():
+            self.timer_task.cancel()
+        self.timer_task = None
         for p in self.players:
             p.score = 0
             p.prompt_submitted = False
@@ -194,8 +193,6 @@ async def broadcast_room_update(room_id, room):
             current_prompter=room.players[room.current_turn].name if room.players else None
         ).dict()
     })
-
-# ================= Main game endpoints ================
 
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room():
@@ -327,12 +324,15 @@ async def start_game(room_id: str):
         player.score = 0
         player.prompt_submitted = False
         player.guessed = False
+    # Cancel old timer if exists
+    if room.timer_task and not room.timer_task.done():
+        room.timer_task.cancel()
+    room.timer_task = asyncio.create_task(start_turn_with_timer(room_id))
     await manager.broadcast(room_id, {
         "event": "game_started",
         "settings": room.to_settings(),
         "players": [p.name for p in room.players],
     })
-    asyncio.create_task(start_turn_with_timer(room_id))
     return StartGameResponse(
         message="Game started",
         settings=room.to_settings(),
@@ -350,8 +350,6 @@ async def restart_game(room_id: str):
     await broadcast_room_update(room_id, room)
     return {"message": "Game restarted"}
 
-# ================= Timer and turn logic ================
-
 async def start_turn_with_timer(room_id: str):
     room = rooms_storage.get(room_id)
     if not room or room.state != "playing":
@@ -366,12 +364,16 @@ async def start_turn_with_timer(room_id: str):
     await countdown(room_id, room.turn_length)
 
 async def countdown(room_id: str, seconds: int):
+    room = rooms_storage.get(room_id)
     for remaining in range(seconds, 0, -1):
         await manager.broadcast(room_id, {
             "event": "timer_update",
             "seconds_left": remaining,
         })
         await asyncio.sleep(1)
+        # Cancelled timer? (e.g. on restart/stop)
+        if room.timer_task and room.timer_task.cancelled():
+            return
     await end_turn(room_id)
 
 async def end_turn(room_id: str):
@@ -387,12 +389,17 @@ async def end_turn(room_id: str):
         room.round_number += 1
         if room.round_number > room.round_count:
             room.state = "finished"
+            if room.timer_task and not room.timer_task.done():
+                room.timer_task.cancel()
             await manager.broadcast(room_id, {
                 "event": "game_finished",
                 "scores": {p.name: p.score for p in room.players},
             })
             return
-    asyncio.create_task(start_turn_with_timer(room_id))
+    # Cancel any previous timer before starting new
+    if room.timer_task and not room.timer_task.done():
+        room.timer_task.cancel()
+    room.timer_task = asyncio.create_task(start_turn_with_timer(room_id))
 
 @rooms_router.post("/rooms/{room_id}/prompt")
 async def submit_prompt(room_id: str, req: PromptRequest):
@@ -458,6 +465,8 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
         })
     await broadcast_room_update(room_id, room)
     if room.all_have_guessed():
+        if room.timer_task and not room.timer_task.done():
+            room.timer_task.cancel()
         await end_turn(room_id)
     return ScoreUpdateResponse(
         player_name=req.player_name,

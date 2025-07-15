@@ -16,15 +16,16 @@ from app.replicate_client import generate_image
 from app.ws_manager import manager
 from typing import List, Optional
 
-# =================== Классы ===================
+# =================== Classes ===================
 
 class Player:
     def __init__(self, name: str, role: str = "user", user_id: Optional[int] = None):
         self.name = name
-        self.role = role  # "admin" или "user"
+        self.role = role  # "admin" or "user"
         self.score = 0
         self.user_id = user_id
         self.prompt_submitted = False
+        self.guessed = False  # Has this player already made a guess in this round
 
 class Room:
     def __init__(self, room_id: str):
@@ -33,9 +34,9 @@ class Room:
         self.state = "waiting"
         self.current_turn = 0
         self.round_number = 1
-        self.round_count = 5        # по умолчанию
-        self.prompt_words = 1       # по умолчанию
-        self.turn_length = 60       # по умолчанию
+        self.round_count = 5        # default value
+        self.prompt_words = 1       # default value
+        self.turn_length = 60       # default value
         self.prompt: Optional[str] = None
         self.image_url: Optional[str] = None
         self.empty_since: Optional[datetime] = None
@@ -107,7 +108,33 @@ class Room:
             "turn_length": self.turn_length,
         }
 
-# ============ Хранилище комнат и роутер ===============
+    def reset_guesses(self):
+        """Reset guessed flag for all players except the prompter (current_turn)"""
+        for idx, p in enumerate(self.players):
+            p.guessed = (idx == self.current_turn)
+
+    def all_have_guessed(self):
+        """Check if all players except the prompter have made a guess"""
+        for idx, p in enumerate(self.players):
+            if idx == self.current_turn:
+                continue
+            if not getattr(p, "guessed", False):
+                return False
+        return True
+
+    def reset_game(self):
+        """Reset all room state as at the beginning"""
+        self.state = "waiting"
+        self.current_turn = 0
+        self.round_number = 1
+        self.prompt = None
+        self.image_url = None
+        for p in self.players:
+            p.score = 0
+            p.prompt_submitted = False
+            p.guessed = False
+
+# ============ Room storage and router ===============
 
 rooms_storage = {}
 rooms_router = APIRouter()
@@ -170,7 +197,7 @@ async def broadcast_room_update(room_id, room):
         ).dict()
     })
 
-# ================= Основные игровые эндпоинты ================
+# ================= Main game endpoints ================
 
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room():
@@ -194,7 +221,7 @@ async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depen
         raise HTTPException(status_code=400, detail="Room is full (max 10 players)")
     if room.find_player(req.player_name):
         raise HTTPException(status_code=400, detail="Player already in room")
-    # user_id если есть
+    # user_id if exists
     result = await db.execute(
         User.__table__.select().where(User.username == req.player_name)
     )
@@ -263,7 +290,7 @@ async def get_room_info(room_id: str):
         current_prompter=room.players[room.current_turn].name if room.players else None
     )
 
-# ================= Новые эндпоинты ================
+# ================= Extra endpoints ================
 
 @rooms_router.post("/rooms/{room_id}/change_settings")
 async def change_settings(room_id: str, req: ChangeSettingsRequest):
@@ -304,6 +331,7 @@ async def start_game(room_id: str):
     for player in room.players:
         player.score = 0
         player.prompt_submitted = False
+        player.guessed = False
     await manager.broadcast(room_id, {
         "event": "game_started",
         "settings": room.to_settings(),
@@ -315,12 +343,25 @@ async def start_game(room_id: str):
         settings=room.to_settings(),
     )
 
-# ================= Таймер и управление ходами ================
+@rooms_router.post("/rooms/{room_id}/restart_game")
+async def restart_game(room_id: str):
+    room = rooms_storage.get(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    room.reset_game()
+    await manager.broadcast(room_id, {
+        "event": "game_restarted"
+    })
+    await broadcast_room_update(room_id, room)
+    return {"message": "Game restarted"}
+
+# ================= Timer and turn logic ================
 
 async def start_turn_with_timer(room_id: str):
     room = rooms_storage.get(room_id)
     if not room or room.state != "playing":
         return
+    room.reset_guesses()
     await manager.broadcast(room_id, {
         "event": "turn_started",
         "current_turn": room.current_turn,
@@ -358,7 +399,7 @@ async def end_turn(room_id: str):
             return
     asyncio.create_task(start_turn_with_timer(room_id))
 
-# ================= Промпты и генерация изображения ================
+# ================= Prompts and image generation ================
 
 @rooms_router.post("/rooms/{room_id}/prompt")
 async def submit_prompt(room_id: str, req: PromptRequest):
@@ -384,7 +425,7 @@ async def submit_prompt(room_id: str, req: PromptRequest):
     await broadcast_room_update(room_id, room)
     return {"prompt": room.prompt, "image_url": room.image_url}
 
-# ================= Угадывания ================
+# ================= Guess logic ================
 
 @rooms_router.post("/rooms/{room_id}/guess", response_model=ScoreUpdateResponse)
 async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends(get_db)):
@@ -396,6 +437,8 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
     correct = req.guess.strip().lower() == room.prompt.strip().lower()
     mark_activity(room)
     player = room.find_player(req.player_name)
+    player.guessed = True  # Mark that the player has made a guess
+
     if correct:
         room.add_score(req.player_name)
         if player and player.user_id:
@@ -423,6 +466,9 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
             "guess": req.guess,
         })
     await broadcast_room_update(room_id, room)
+    # ======= End turn early if all players have guessed! =======
+    if room.all_have_guessed():
+        await end_turn(room_id)
     return ScoreUpdateResponse(
         player_name=req.player_name,
         score=player.score if player else 0,

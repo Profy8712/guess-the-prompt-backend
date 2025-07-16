@@ -324,10 +324,9 @@ async def start_game(room_id: str):
         player.score = 0
         player.prompt_submitted = False
         player.guessed = False
-    # Cancel old timer if exists
     if room.timer_task and not room.timer_task.done():
         room.timer_task.cancel()
-    room.timer_task = asyncio.create_task(start_turn_with_timer(room_id))
+    room.timer_task = None
     await manager.broadcast(room_id, {
         "event": "game_started",
         "settings": room.to_settings(),
@@ -366,12 +365,13 @@ async def start_turn_with_timer(room_id: str):
 async def countdown(room_id: str, seconds: int):
     room = rooms_storage.get(room_id)
     for remaining in range(seconds, 0, -1):
-        await manager.broadcast(room_id, {
-            "event": "timer_update",
-            "seconds_left": remaining,
-        })
+        # Only broadcast every 5 seconds, and each second for last 5
+        if remaining % 5 == 0 or remaining <= 5:
+            await manager.broadcast(room_id, {
+                "event": "timer_update",
+                "seconds_left": remaining,
+            })
         await asyncio.sleep(1)
-        # Cancelled timer? (e.g. on restart/stop)
         if room.timer_task and room.timer_task.cancelled():
             return
     await end_turn(room_id)
@@ -396,7 +396,6 @@ async def end_turn(room_id: str):
                 "scores": {p.name: p.score for p in room.players},
             })
             return
-    # Cancel any previous timer before starting new
     if room.timer_task and not room.timer_task.done():
         room.timer_task.cancel()
     room.timer_task = asyncio.create_task(start_turn_with_timer(room_id))
@@ -423,6 +422,9 @@ async def submit_prompt(room_id: str, req: PromptRequest):
         "players": room.get_player_names(),
     })
     await broadcast_room_update(room_id, room)
+    if room.timer_task and not room.timer_task.done():
+        room.timer_task.cancel()
+    room.timer_task = asyncio.create_task(start_turn_with_timer(room_id))
     return {"prompt": room.prompt, "image_url": room.image_url}
 
 @rooms_router.post("/rooms/{room_id}/guess", response_model=ScoreUpdateResponse)

@@ -62,7 +62,6 @@ class Room:
         if player:
             idx = self.players.index(player)
             self.players.remove(player)
-            # Корректируем current_turn, если нужно
             if len(self.players) == 0:
                 self.current_turn = 0
                 self.empty_since = datetime.utcnow()
@@ -406,6 +405,7 @@ async def end_turn(room_id: str):
     room = rooms_storage.get(room_id)
     if not room or room.state != "playing":
         return
+
     prev_turn = room.current_turn
 
     room.prompt = None
@@ -422,10 +422,13 @@ async def end_turn(room_id: str):
                 "event": "game_finished",
                 "scores": {p.name: p.score for p in room.players},
             })
+            await broadcast_room_update(room_id, room)
             return
+
     if room.timer_task and not room.timer_task.done():
         room.timer_task.cancel()
     room.timer_task = None
+
     await manager.broadcast(room_id, {
         "event": "turn_time_expired",
         "current_turn": prev_turn,
@@ -492,38 +495,36 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
                 user.total_games += 1
                 await db.commit()
         prev_turn = room.current_turn
-        room.prompt = None
-        room.image_url = None
-        room.next_turn()
+
+        if room.timer_task and not room.timer_task.done():
+            room.timer_task.cancel()
+        room.timer_task = None
+
         await manager.broadcast(room_id, {
             "event": "correct_guess",
             "player": req.player_name,
             "score": player.score if player else 0,
             "answer": req.guess,
             "prev_turn": prev_turn,
-            "next_turn": room.current_turn,
-            "current_prompter": room.players[room.current_turn].name if room.players else None,
+            "next_turn": (room.current_turn + 1) % len(room.players) if room.players else 0,
+            "current_prompter": room.players[(room.current_turn + 1) % len(room.players)].name if room.players else None,
         })
-        if room.timer_task and not room.timer_task.done():
-            room.timer_task.cancel()
-        room.timer_task = None
-        await manager.broadcast(room_id, {
-            "event": "await_prompt",
-            "current_turn": room.current_turn,
-            "current_prompter": room.players[room.current_turn].name if room.players else None,
-        })
-        await broadcast_new_prompter(room_id, room)
+
+        await end_turn(room_id)
     else:
         await manager.broadcast(room_id, {
             "event": "wrong_guess",
             "player": req.player_name,
             "guess": req.guess,
         })
+
     await broadcast_room_update(room_id, room)
-    if room.all_have_guessed():
+
+    if room.all_have_guessed() and not correct:
         if room.timer_task and not room.timer_task.done():
             room.timer_task.cancel()
         await end_turn(room_id)
+
     return ScoreUpdateResponse(
         player_name=req.player_name,
         score=player.score if player else 0,

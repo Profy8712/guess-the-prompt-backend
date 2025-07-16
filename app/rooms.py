@@ -320,7 +320,7 @@ async def start_game(room_id: str):
         raise HTTPException(status_code=400, detail="Game already started")
     room.state = "playing"
     room.round_number = 1
-    room.current_turn = 0  # Сбросить индекс prompter'а в начало!
+    room.current_turn = 0  # Start from the first player
     for player in room.players:
         player.score = 0
         player.prompt_submitted = False
@@ -336,7 +336,7 @@ async def start_game(room_id: str):
         "current_prompter": room.players[room.current_turn].name if room.players else None,
     })
     await broadcast_room_update(room_id, room)
-    # Ждём первый prompt!
+    # Wait for the first prompt before starting timer
     return StartGameResponse(
         message="Game started",
         settings=room.to_settings(),
@@ -385,14 +385,14 @@ async def end_turn(room_id: str):
     room = rooms_storage.get(room_id)
     if not room or room.state != "playing":
         return
-    await manager.broadcast(room_id, {
-        "event": "turn_time_expired",
-        "current_turn": room.current_turn,
-    })
-    # Сброс prompt и image_url перед сменой prompter
+    prev_turn = room.current_turn
+
+    # Сброс prompt и image_url
     room.prompt = None
     room.image_url = None
+
     room.next_turn()
+    # Завершить игру если все раунды сыграны
     if room.current_turn == 0:
         room.round_number += 1
         if room.round_number > room.round_count:
@@ -407,6 +407,13 @@ async def end_turn(room_id: str):
     if room.timer_task and not room.timer_task.done():
         room.timer_task.cancel()
     room.timer_task = None
+    # Сообщаем фронту кто теперь prompter
+    await manager.broadcast(room_id, {
+        "event": "turn_time_expired",
+        "current_turn": prev_turn,
+        "next_turn": room.current_turn,
+        "current_prompter": room.players[room.current_turn].name if room.players else None,
+    })
     await manager.broadcast(room_id, {
         "event": "await_prompt",
         "current_turn": room.current_turn,

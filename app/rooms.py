@@ -60,9 +60,17 @@ class Room:
     def remove_player(self, name: str):
         player = self.find_player(name)
         if player:
+            idx = self.players.index(player)
             self.players.remove(player)
+            # Корректируем current_turn, если нужно
             if len(self.players) == 0:
+                self.current_turn = 0
                 self.empty_since = datetime.utcnow()
+            else:
+                if idx < self.current_turn:
+                    self.current_turn -= 1
+                elif idx == self.current_turn:
+                    self.current_turn = self.current_turn % len(self.players)
             self.update_activity()
             return player
         return None
@@ -239,6 +247,7 @@ async def join_room(room_id: str, req: JoinRoomRequest, db: AsyncSession = Depen
         "players": room.get_player_names(),
     })
     await broadcast_room_update(room_id, room)
+    await broadcast_new_prompter(room_id, room)
     return PlayerInfo(name=player.name, role=player.role, score=player.score)
 
 @rooms_router.post("/rooms/{room_id}/leave")

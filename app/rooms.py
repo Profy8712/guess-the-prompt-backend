@@ -194,6 +194,14 @@ async def broadcast_room_update(room_id, room):
         ).dict()
     })
 
+async def broadcast_new_prompter(room_id, room):
+    await manager.broadcast(room_id, {
+        "event": "new_prompter",
+        "current_turn": room.current_turn,
+        "current_prompter": room.players[room.current_turn].name if room.players else None,
+        "round_number": room.round_number,
+    })
+
 @rooms_router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room():
     ensure_cleanup_task()
@@ -261,6 +269,7 @@ async def leave_room(room_id: str, req: LeaveRoomRequest):
             "new_admin": new_admin.name
         })
     await broadcast_room_update(room_id, room)
+    await broadcast_new_prompter(room_id, room)
     return {"message": f"Player {req.player_name} left room {room_id}"}
 
 @rooms_router.get("/rooms/{room_id}", response_model=RoomInfo)
@@ -309,6 +318,7 @@ async def kick_player(room_id: str, req: KickPlayerRequest):
         "player": req.player_name,
     })
     await broadcast_room_update(room_id, room)
+    await broadcast_new_prompter(room_id, room)
     return {"message": f"Player {req.player_name} was kicked."}
 
 @rooms_router.post("/rooms/{room_id}/start_game", response_model=StartGameResponse)
@@ -320,7 +330,7 @@ async def start_game(room_id: str):
         raise HTTPException(status_code=400, detail="Game already started")
     room.state = "playing"
     room.round_number = 1
-    room.current_turn = 0  # Start from the first player
+    room.current_turn = 0
     for player in room.players:
         player.score = 0
         player.prompt_submitted = False
@@ -336,7 +346,7 @@ async def start_game(room_id: str):
         "current_prompter": room.players[room.current_turn].name if room.players else None,
     })
     await broadcast_room_update(room_id, room)
-    # Wait for the first prompt before starting timer
+    await broadcast_new_prompter(room_id, room)
     return StartGameResponse(
         message="Game started",
         settings=room.to_settings(),
@@ -352,6 +362,7 @@ async def restart_game(room_id: str):
         "event": "game_restarted"
     })
     await broadcast_room_update(room_id, room)
+    await broadcast_new_prompter(room_id, room)
     return {"message": "Game restarted"}
 
 async def start_turn_with_timer(room_id: str):
@@ -366,6 +377,7 @@ async def start_turn_with_timer(room_id: str):
         "round_number": room.round_number,
         "current_prompter": room.players[room.current_turn].name if room.players else None,
     })
+    await broadcast_new_prompter(room_id, room)
     await countdown(room_id, room.turn_length)
 
 async def countdown(room_id: str, seconds: int):
@@ -387,12 +399,10 @@ async def end_turn(room_id: str):
         return
     prev_turn = room.current_turn
 
-    # Сброс prompt и image_url
     room.prompt = None
     room.image_url = None
 
     room.next_turn()
-    # Завершить игру если все раунды сыграны
     if room.current_turn == 0:
         room.round_number += 1
         if room.round_number > room.round_count:
@@ -407,7 +417,6 @@ async def end_turn(room_id: str):
     if room.timer_task and not room.timer_task.done():
         room.timer_task.cancel()
     room.timer_task = None
-    # Сообщаем фронту кто теперь prompter
     await manager.broadcast(room_id, {
         "event": "turn_time_expired",
         "current_turn": prev_turn,
@@ -419,6 +428,7 @@ async def end_turn(room_id: str):
         "current_turn": room.current_turn,
         "current_prompter": room.players[room.current_turn].name if room.players else None,
     })
+    await broadcast_new_prompter(room_id, room)
     await broadcast_room_update(room_id, room)
 
 @rooms_router.post("/rooms/{room_id}/prompt")
@@ -446,6 +456,7 @@ async def submit_prompt(room_id: str, req: PromptRequest):
         "current_prompter": room.players[room.current_turn].name if room.players else None,
     })
     await broadcast_room_update(room_id, room)
+    await broadcast_new_prompter(room_id, room)
     if room.timer_task and not room.timer_task.done():
         room.timer_task.cancel()
     room.timer_task = asyncio.create_task(start_turn_with_timer(room_id))
@@ -492,6 +503,7 @@ async def make_guess(room_id: str, req: GuessRequest, db: AsyncSession = Depends
             "current_turn": room.current_turn,
             "current_prompter": room.players[room.current_turn].name if room.players else None,
         })
+        await broadcast_new_prompter(room_id, room)
     else:
         await manager.broadcast(room_id, {
             "event": "wrong_guess",
